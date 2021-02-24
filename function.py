@@ -1,4 +1,5 @@
-from csv import DictReader, DictWriter
+from contextlib import closing
+import csv
 from datetime import datetime
 import os
 import boto3
@@ -14,12 +15,6 @@ class Pipe:
     value = ""
     def write(self, text):
         self.value = self.value + text
-
-
-def parse_text(text):
-    return DictReader(
-        [l for l in text.split('\n')],
-    )
 
 
 def write_to_s3(key, content):
@@ -39,15 +34,24 @@ def slice_columns(row):
         'deaths': row['deaths'],
     }
 
+
 def to_csv(data):
     pipe = Pipe()
     headers = data[0].keys()
-    writer = DictWriter(pipe, headers)
+    writer = csv.DictWriter(pipe, headers)
     writer.writeheader()
     for row in data:
         writer.writerow(row)
 
     return pipe.value
+
+
+def handle_state(mo_data):
+
+    state_csv = to_csv(mo_data)
+    file_name = f"missouri-counties.csv"
+
+    return write_to_s3(file_name, state_csv)
 
 
 def handle_county(county_name, mo_data):
@@ -62,15 +66,18 @@ def handle_county(county_name, mo_data):
 
 
 def main():
-    r = requests.get(CSV_URL)
-    r.raise_for_status()
+    with closing(requests.get(CSV_URL, stream=True)) as r:
+        r.raise_for_status()
+        f = (line.decode('utf-8') for line in r.iter_lines())
+        reader = csv.DictReader(f)
 
-    data = parse_text(r.text)
+        mo_data = []
 
-    mo_data = [
-        r for r in data if r['state'] == 'Missouri'
-        ]
+        for row in reader:
+            if row['state'] == "Missouri":
+                mo_data.append(row)
 
+    handle_state(mo_data)
     handle_county('Boone', mo_data)
     handle_county('Cole', mo_data)
     handle_county('Callaway', mo_data)
